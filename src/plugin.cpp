@@ -1,5 +1,7 @@
 #include "logger.h"
 
+using namespace RE;
+
 bool iequals(const std::string& a, const std::string& b) {
     if (a.size() != b.size()) return false;
     return std::equal(a.begin(), a.end(), b.begin(),
@@ -22,12 +24,35 @@ RE::TESObjectREFR* GetMapMarkerByName(RE::StaticFunctionTag*, std::string a_name
     return nullptr;
 }
 
-float GetDistance(RE::StaticFunctionTag*, RE::TESObjectREFR* ref1, RE::TESObjectREFR* ref2) {
-    if (!ref1 || !ref2) {
-        return 0;
+// this is awful and doesn't handle all edgecases
+// like a cell having a teleport door to another interior cell
+// or cells that are nested within multiple levels of interiors
+RE::NiPoint3 GetExteriorPosition(RE::TESObjectREFR* ref) {
+    if (!ref) return {};
+
+    auto* cell = ref->GetParentCell();
+    if (!cell || !cell->IsInteriorCell()) return ref->GetPosition();
+
+    // Interior: find a door with teleport
+    for (auto& handle : cell->GetRuntimeData().references) {
+        auto door = handle.get();
+        if (!door) continue;
+        if (door->GetBaseObject()->GetFormType() != RE::FormType::Door) continue;
+        auto teleportDoor = door->extraList.GetTeleportLinkedDoor();
+        if (!teleportDoor) continue;
+        return teleportDoor.get().get()->GetPosition();
     }
 
-    return ref1->GetPosition().GetSquaredDistance(ref2->GetPosition()) / 1000;
+    return {};
+}
+
+float GetDistance(StaticFunctionTag*, RE::TESObjectREFR* ref1, RE::TESObjectREFR* ref2) {
+    if (!ref1 || !ref2) return 0.0f;
+
+    auto pos1 = GetExteriorPosition(ref1);
+    auto pos2 = GetExteriorPosition(ref2);
+
+    return pos1.GetDistance(pos2);
 }
 
 bool HasAnyKeywordInList(RE::StaticFunctionTag*, RE::TESForm* form, RE::BGSListForm* theList) {
@@ -46,7 +71,7 @@ bool PapyrusBinder(RE::BSScript::IVirtualMachine* vm) {
     return false;
 }
 
-SKSEPluginLoad(const SKSE::LoadInterface *skse) {
+SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     SetupLog();
     SKSE::Init(skse);
     SKSE::GetPapyrusInterface()->Register(PapyrusBinder);
