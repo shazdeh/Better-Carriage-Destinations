@@ -2,22 +2,119 @@
 
 using namespace RE;
 
-bool iequals(const std::string& a, const std::string& b) {
-    if (a.size() != b.size()) return false;
-    return std::equal(a.begin(), a.end(), b.begin(),
-                      [](char c1, char c2) { return std::tolower(c1) == std::tolower(c2); });
+BGSListForm* filterList;
+bool isWhitelist;
+
+void OpenMenu(std::string_view a_menuName) {
+    if (const auto UIMsgQueue = RE::UIMessageQueue::GetSingleton(); UIMsgQueue) {
+        UIMsgQueue->AddMessage(a_menuName, RE::UI_MESSAGE_TYPE::kShow, nullptr);
+    }
 }
 
-RE::TESObjectREFR* GetMapMarkerByName(RE::StaticFunctionTag*, std::string a_name) {
-    auto* pc = RE::PlayerCharacter::GetSingleton();
-    auto& data = pc->GetPlayerRuntimeData();
-    auto& mapMarkers = data.currentMapMarkers;
+void CloseMenu(std::string_view a_menuName) {
+    if (const auto UIMsgQueue = RE::UIMessageQueue::GetSingleton(); UIMsgQueue) {
+        UIMsgQueue->AddMessage(a_menuName, RE::UI_MESSAGE_TYPE::kHide, nullptr);
+    }
+}
 
-    for (auto& mapMarker : mapMarkers) {
-        const auto refr = mapMarker.get().get();
-        const auto marker = refr ? refr->extraList.GetByType<RE::ExtraMapMarker>() : nullptr;
-        if (marker && marker->mapData && iequals(marker->mapData->locationName.GetFullName(), a_name)) {
-            return refr;
+TESObjectREFR* GetRefFromHandle(RefHandle handle) {
+    RE::TESObjectREFRPtr refr;
+    RE::LookupReferenceByHandle(handle, refr);
+    if (auto* ref = refr.get(); ref) {
+        return ref;
+    }
+    return nullptr;
+}
+
+class CreateFilterList : public RE::GFxFunctionHandler {
+public:
+    virtual void Call(Params& params) override {
+        ConsoleLog::GetSingleton()->Print("here!");
+        auto menu = UI::GetSingleton()->GetMenu<MapMenu>();
+        auto& markers = menu->GetRuntimeData2()->mapMarkers;
+        auto movie = menu->uiMovie;
+        if (!movie) return;
+        GFxValue _root;
+        movie->GetVariable(&_root, "_root");
+
+        if (filterList) {
+            std::vector<int> indexes;
+            for (int i = 0; i < markers.size(); i++) {
+                if (auto ref = GetRefFromHandle(markers[i].ref); ref) {
+                    if (filterList->HasForm(ref)) {
+                        indexes.push_back(i);
+                    }
+                }
+            }
+            if (!indexes.empty()) {
+                GFxValue data;
+                movie->CreateArray(&data);
+                data.SetArraySize(indexes.size());
+                for (int i = 0; i < indexes.size(); i++) {
+                    data.SetElement(i, indexes[i]);
+                }
+                _root.SetMember("BCD_filterList", data);
+                _root.SetMember("BCD_isWhitelist", GFxValue(isWhitelist));
+            }
+        }
+    }
+};
+
+
+void Inject() {
+    ConsoleLog::GetSingleton()->Print("inject action");
+    auto ui = UI::GetSingleton();
+    if (!ui) return;
+
+    auto menu = ui->GetMenu<MapMenu>();
+    if (!menu || !menu->uiMovie) {
+        return;
+    }
+    auto movie = menu->uiMovie;
+
+    GFxValue _root;
+    movie->GetVariable(&_root, "_root");
+
+    // the white/block list is setup using a call from the injected swf
+    // because the at MenuOpenCloseEvent, the markers list is empty
+    // it's all jank
+    RE::GFxValue fn1;
+    movie->CreateFunction(&fn1, new CreateFilterList());
+    _root.SetMember("CreateFilterList", fn1);
+
+    GFxValue args[2];
+    args[0] = GFxValue("BCD");
+    args[1] = GFxValue(8008);
+    _root.Invoke("createEmptyMovieClip", nullptr, args, 2);
+    if (movie->GetVariable(&_root, "_root.BCD")) {
+        GFxValue args[1];
+        args[0] = GFxValue("bettercarriage_inject.swf");
+        _root.Invoke("loadMovie", nullptr, args, 1);
+    }
+}
+
+class MyEventSink : public RE::BSTEventSink<MenuOpenCloseEvent> {
+public:
+    RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* event,
+                                          RE::BSTEventSource<RE::MenuOpenCloseEvent>* source) {
+        if (event->menuName != MapMenu::MENU_NAME) return RE::BSEventNotifyControl::kContinue;
+        if (event->opening) {
+            Inject();
+        } else {
+            source->RemoveEventSink(this);
+            filterList = nullptr;
+        }
+        return RE::BSEventNotifyControl::kContinue;
+    }
+};
+
+RE::TESObjectREFR* GetMapMarkerByIndex(RE::StaticFunctionTag*, int a_index) {
+    if (auto ui = UI::GetSingleton(); ui) {
+        if (auto menu = ui->GetMenu<MapMenu>(); menu) {
+            auto& markers = menu->GetRuntimeData2()->mapMarkers;
+            if (a_index >= 0 && a_index < markers.size()) {
+                return GetRefFromHandle(markers[a_index].ref);
+            }
         }
     }
 
@@ -63,17 +160,59 @@ bool HasAnyKeywordInList(RE::StaticFunctionTag*, RE::TESForm* form, RE::BGSListF
     return form->HasKeywordInList(theList, false);
 }
 
+void AutoUnlockMarkers() {
+    static bool bAdded = false;
+    if (bAdded) return;
+    bAdded = true;
+    BGSListForm* list = TESForm::LookupByEditorID<BGSListForm>("BCD_AutoUnlockMarkers");
+    if (!list) return;
+    list->ForEachForm([](TESForm* form){
+        if (form->Is(FormType::Reference)) {
+            auto ref = form->As<TESObjectREFR>();
+            auto* extra = ref->extraList.GetByType<ExtraMapMarker>();
+            if (!extra) return BSContainer::ForEachResult::kContinue;
+            extra->mapData->SetVisible(true);
+        }
+        return BSContainer::ForEachResult::kContinue;
+    });
+}
+
+static MyEventSink theSink;
+
+void OpenTheMap(StaticFunctionTag*, BGSListForm* a_whitelist = nullptr, bool a_isWhitelist = true) {
+    AutoUnlockMarkers();
+    CloseMenu(DialogueMenu::MENU_NAME);
+    if (a_whitelist) {
+        filterList = a_whitelist;
+        isWhitelist = a_isWhitelist;
+    }
+    UI::GetSingleton()->AddEventSink(&theSink);
+    OpenMenu(MapMenu::MENU_NAME);
+}
+
+void CloseTheMap(StaticFunctionTag*) { CloseMenu(MapMenu::MENU_NAME); }
+
 bool PapyrusBinder(RE::BSScript::IVirtualMachine* vm) {
-    vm->RegisterFunction("GetMapMarkerByName", "BCD_Utils", GetMapMarkerByName);
-    vm->RegisterFunction("GetDistance", "BCD_Utils", GetDistance);
-    vm->RegisterFunction("HasAnyKeywordInList", "BCD_Utils", HasAnyKeywordInList);
+    std::string_view script = "BCD_Utils"sv;
+    vm->RegisterFunction("GetMapMarkerByIndex", script, GetMapMarkerByIndex);
+    vm->RegisterFunction("GetDistance", script, GetDistance);
+    vm->RegisterFunction("HasAnyKeywordInList", script, HasAnyKeywordInList);
+    vm->RegisterFunction("OpenTheMap", script, OpenTheMap);
+    vm->RegisterFunction("CloseTheMap", script, CloseTheMap);
 
     return false;
+}
+
+void OnMessage(SKSE::MessagingInterface::Message* message) {
+    if (message->type == SKSE::MessagingInterface::kDataLoaded) {
+        
+    }
 }
 
 SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     SetupLog();
     SKSE::Init(skse);
     SKSE::GetPapyrusInterface()->Register(PapyrusBinder);
+    SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
     return true;
 }

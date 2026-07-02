@@ -8,12 +8,14 @@ class BetterCarriageDestinations extends MovieClip {
     /* refs */
     public var WorldMap:MovieClip;
 
+    private var numMarkers:Number = undefined;
+
     public var excludedMarkerType:Array = [
         57, // return to skyrim
         58, // Solstheim
         63, // quest markers
         65, // custom destination
-        66 // player position
+        66  // player position
     ];
 
     function BetterCarriageDestinations() {
@@ -28,25 +30,91 @@ class BetterCarriageDestinations extends MovieClip {
     function duckPunch() {
         WorldMap.BCD__ClickSelectedMarker = WorldMap.ClickSelectedMarker;
         WorldMap.ClickSelectedMarker = ClickSelectedMarker;
+
+        WorldMap.BCD__CreateMarkers = WorldMap.CreateMarkers;
+        WorldMap.CreateMarkers = CreateMarkers;
+
+        WorldMap.BCD__SetNumMarkers = WorldMap.SetNumMarkers;
+        WorldMap.SetNumMarkers = SetNumMarkers;
     }
 
-    function ClickSelectedMarker() : Void {
+    // @override
+    public function SetNumMarkers(a_numMarkers: Number): Void {
         this = BetterCarriageDestinations.instance;
-
-        if ( isValidMapMarker() ) {
-            skse.SendModEvent('BCD_SetDestination', WorldMap._selectedMarker._label);
+        WorldMap.BCD__SetNumMarkers(a_numMarkers);
+        if (numMarkers === undefined) {
+            numMarkers = a_numMarkers;
         }
     }
 
-    function isValidMapMarker() : Boolean {
-        var currentMarker:Number = WorldMap._selectedMarker.markerType;
+    // @override
+    function CreateMarkers() {
+        this = BetterCarriageDestinations.instance;
+        WorldMap.BCD__CreateMarkers();
+
+        var markerList:Array = WorldMap._markerList;
+        if (
+            numMarkers !== undefined
+            && markerList.length === numMarkers
+            && markerList[markerList.length - 1] !== undefined // markers are rendered in batches, this ensures the CreateMarkers() is done
+        ) {
+            _root.CreateFilterList();
+            afterRender();
+        }
+    }
+
+    // @override
+    function ClickSelectedMarker() : Void {
+        this = BetterCarriageDestinations.instance;
+
+        if (isValidMapMarker(WorldMap._selectedMarker)) {
+            skse.SendModEvent('BCD_SetDestination', '', WorldMap._selectedMarker.index);
+        }
+    }
+
+    function afterRender() {
+        if (_root.BCD_filterList === undefined || _root.BCD_filterList.length === 0) return;
+        var markerList:Array = WorldMap._markerList;
+        for (var i = 0; i < markerList.length; i++) {
+            if (!isValidMapMarker(markerList[i])) {
+                markerList[i]._alpha = 20;
+            }
+        }
+    }
+
+    function isValidMapMarker(marker:Object) : Boolean {
+        var type:Number = marker.markerType;
         for ( var i = 0; i < excludedMarkerType.length; i++ ) {
-            if ( currentMarker === excludedMarkerType[i] ) {
+            if ( type === excludedMarkerType[i] ) {
+                return false;
+            }
+        }
+
+        var index = marker.index;
+        if (_root.BCD_filterList.length) {
+            var result:Number = array_search(marker.index, _root.BCD_filterList);
+            if (
+                (_root.BCD_isWhitelist === true && result === -1)
+                || (_root.BCD_isWhitelist === false && result !== -1)
+            ) {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /**
+     * Search haystack for needle, returns the index of found item, otherwise -1
+     */
+    function array_search(needle, haystack:Array) : Number {
+        for (var i = 0; i < haystack.length; i++ ) {
+            if (haystack[ i ] === needle) {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     function LogObject( obj ) {
