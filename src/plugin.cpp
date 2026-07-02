@@ -2,6 +2,12 @@
 
 using namespace RE;
 
+TESGlobal* OnlyDiscovered;
+TESGlobal* OnlySettlement;
+TESGlobal* AllowCleared;
+BGSListForm* SettlementLocKeywordsList;
+
+// temp storage
 BGSListForm* filterList;
 bool isWhitelist;
 
@@ -26,6 +32,32 @@ TESObjectREFR* GetRefFromHandle(RefHandle handle) {
     return nullptr;
 }
 
+bool IsMarkerBlocked(TESObjectREFR* marker) {
+    if (filterList) {
+        if ((isWhitelist && !filterList->HasForm(marker)) || (!isWhitelist && filterList->HasForm(marker))) {
+            return true;
+        }
+    }
+
+    if (OnlyDiscovered->value == 1.0f) {
+        auto* extra = marker->extraList.GetByType<ExtraMapMarker>();
+        if (extra && !extra->mapData->flags.any(MapMarkerData::Flag::kCanTravelTo)) return true;
+    }
+
+    // following filters only apply when not using a whitelist
+    // my feeling is if we have a list of "allow only these markers..." then
+    // the other conditions shouldn't apply.
+    if (!filterList || !isWhitelist) {
+        if (OnlySettlement->value == 1.0f) {
+            if (auto* location = marker->GetCurrentLocation(); location) {
+                if (!(location->HasKeywordInList(SettlementLocKeywordsList, false) || (AllowCleared->value == 1.0f && location->cleared))) return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 class CreateFilterList : public RE::GFxFunctionHandler {
 public:
     virtual void Call(Params& params) override {
@@ -36,19 +68,17 @@ public:
         GFxValue _root;
         movie->GetVariable(&_root, "_root");
 
-        if (filterList) {
-            GFxValue data;
-            movie->CreateObject(&data);
-            for (int i = 0; i < markers.size(); i++) {
-                if (auto ref = GetRefFromHandle(markers[i].ref); ref) {
-                    if ((isWhitelist && !filterList->HasForm(ref)) || (!isWhitelist && filterList->HasForm(ref))) {
-                        data.SetMember(std::to_string(i).c_str(), GFxValue(true));
-                    }
+        GFxValue data;
+        movie->CreateObject(&data);
+        for (int i = 0; i < markers.size(); i++) {
+            if (auto* ref = GetRefFromHandle(markers[i].ref); ref) {
+                if (IsMarkerBlocked(ref)) {
+                    data.SetMember(std::to_string(i).c_str(), GFxValue(true));
                 }
             }
-            _root.SetMember("BCD_filterList", data);
-            _root.SetMember("BCD_isWhitelist", GFxValue(isWhitelist));
         }
+        _root.SetMember("BCD_filterList", data);
+        _root.SetMember("BCD_isWhitelist", GFxValue(isWhitelist));
     }
 };
 
@@ -196,7 +226,10 @@ bool PapyrusBinder(RE::BSScript::IVirtualMachine* vm) {
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
-        
+        OnlyDiscovered = TESForm::LookupByEditorID<TESGlobal>("BCD_OnlyDiscovered");
+        OnlySettlement = TESForm::LookupByEditorID<TESGlobal>("BCD_OnlySettlement");
+        AllowCleared = TESForm::LookupByEditorID<TESGlobal>("BCD_AllowCleared");
+        SettlementLocKeywordsList = TESForm::LookupByEditorID<BGSListForm>("BCD_SettlementLocKeywordsList");
     }
 }
 
