@@ -29,7 +29,6 @@ TESObjectREFR* GetRefFromHandle(RefHandle handle) {
 class CreateFilterList : public RE::GFxFunctionHandler {
 public:
     virtual void Call(Params& params) override {
-        ConsoleLog::GetSingleton()->Print("here!");
         auto menu = UI::GetSingleton()->GetMenu<MapMenu>();
         auto& markers = menu->GetRuntimeData2()->mapMarkers;
         auto movie = menu->uiMovie;
@@ -38,31 +37,23 @@ public:
         movie->GetVariable(&_root, "_root");
 
         if (filterList) {
-            std::vector<int> indexes;
+            GFxValue data;
+            movie->CreateObject(&data);
             for (int i = 0; i < markers.size(); i++) {
                 if (auto ref = GetRefFromHandle(markers[i].ref); ref) {
-                    if (filterList->HasForm(ref)) {
-                        indexes.push_back(i);
+                    if ((isWhitelist && !filterList->HasForm(ref)) || (!isWhitelist && filterList->HasForm(ref))) {
+                        data.SetMember(std::to_string(i).c_str(), GFxValue(true));
                     }
                 }
             }
-            if (!indexes.empty()) {
-                GFxValue data;
-                movie->CreateArray(&data);
-                data.SetArraySize(indexes.size());
-                for (int i = 0; i < indexes.size(); i++) {
-                    data.SetElement(i, indexes[i]);
-                }
-                _root.SetMember("BCD_filterList", data);
-                _root.SetMember("BCD_isWhitelist", GFxValue(isWhitelist));
-            }
+            _root.SetMember("BCD_filterList", data);
+            _root.SetMember("BCD_isWhitelist", GFxValue(isWhitelist));
         }
     }
 };
 
 
 void Inject() {
-    ConsoleLog::GetSingleton()->Print("inject action");
     auto ui = UI::GetSingleton();
     if (!ui) return;
 

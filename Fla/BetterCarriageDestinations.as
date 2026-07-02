@@ -20,6 +20,7 @@ class BetterCarriageDestinations extends MovieClip {
 
     function BetterCarriageDestinations() {
         BetterCarriageDestinations.instance = this;
+        _root.BCD_filterList = undefined;
     }
 
 	function onLoad() {
@@ -58,7 +59,9 @@ class BetterCarriageDestinations extends MovieClip {
             && markerList.length === numMarkers
             && markerList[markerList.length - 1] !== undefined // markers are rendered in batches, this ensures the CreateMarkers() is done
         ) {
-            _root.CreateFilterList();
+            if (_root.BCD_filterList === undefined) {
+                _root.CreateFilterList();
+            }
             afterRender();
         }
     }
@@ -73,7 +76,7 @@ class BetterCarriageDestinations extends MovieClip {
     }
 
     function afterRender() {
-        if (_root.BCD_filterList === undefined || _root.BCD_filterList.length === 0) return;
+        if (_root.BCD_filterList === undefined) return;
         var markerList:Array = WorldMap._markerList;
         for (var i = 0; i < markerList.length; i++) {
             if (!isValidMapMarker(markerList[i])) {
@@ -91,37 +94,10 @@ class BetterCarriageDestinations extends MovieClip {
         }
 
         var index = marker.index;
-        if (_root.BCD_filterList.length) {
-            var result:Number = array_search(marker.index, _root.BCD_filterList);
-            if (
-                (_root.BCD_isWhitelist === true && result === -1)
-                || (_root.BCD_isWhitelist === false && result !== -1)
-            ) {
-                return false;
-            }
+        if (_root.BCD_filterList !== undefined && _root.BCD_filterList[index] === true) {
+            return false;
         }
 
         return true;
-    }
-
-    /**
-     * Search haystack for needle, returns the index of found item, otherwise -1
-     */
-    function array_search(needle, haystack:Array) : Number {
-        for (var i = 0; i < haystack.length; i++ ) {
-            if (haystack[ i ] === needle) {
-                return i;
-            }
-        }
-
-        return -1;
-    }
-
-    function LogObject( obj ) {
-        var s = '';
-        for ( var i in obj ) {
-            s += i + ': ' + obj[i] + ';\n';
-        }
-        skse.Log(s);
     }
 }
